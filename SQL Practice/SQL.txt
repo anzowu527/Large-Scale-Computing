@@ -1,0 +1,55 @@
+(base) [awu3@vm046 ~]$ mysql awu3
+Reading table information for completion of table and column names
+You can turn off this feature to get a quicker startup with -A
+
+Welcome to the MySQL monitor.  Commands end with ; or \g.
+Your MySQL connection id is 537
+Server version: 8.0.30 Source distribution
+
+Copyright (c) 2000, 2022, Oracle and/or its affiliates.
+
+Oracle is a registered trademark of Oracle Corporation and/or its
+affiliates. Other names may be trademarks of their respective
+owners.
+
+Type 'help;' or '\h' for help. Type '\c' to clear the current input statement.
+
+mysql> WITH CambridgeCentroid AS (
+    ->     SELECT AVG(Lng) as center_longitude, AVG(Lat) as center_latitude
+    ->     FROM Zips
+    ->     WHERE City = 'Cambridge' AND StateName = 'Massachusetts'
+    -> ),
+    -> TargetZip AS (
+    ->     SELECT Zips.Zip, Zips.Lat, Zips.Lng,
+    ->         ST_Distance_Sphere(POINT(Zips.Lng, Zips.Lat),
+    ->                             POINT(CambridgeCentroid.center_longitude, CambridgeCentroid.center_latitude)) AS DistanceToCenter
+    ->     FROM Zips, CambridgeCentroid
+    ->     WHERE ST_Distance_Sphere(POINT(Zips.Lng, Zips.Lat),
+    ->                             POINT(CambridgeCentroid.center_longitude, CambridgeCentroid.center_latitude)) < 100000
+    -> ),
+    -> TargetCustomers AS (
+    ->     SELECT Customer.CustomerId, Customer.PostalCode
+    ->     FROM Customer
+    ->     JOIN TargetZip ON Customer.PostalCode = TargetZip.Zip
+    -> ),
+    -> TargetOrders AS (
+    ->     SELECT Orders.OrderId, TargetCustomers.PostalCode
+    ->     FROM Orders
+    ->     JOIN TargetCustomers ON Orders.CustomerId = TargetCustomers.CustomerId
+    -> )
+    -> 
+    -> SELECT TargetOrders.PostalCode, COUNT(Orders.CustomerId) AS TotalQuantity
+    -> FROM Orders
+    -> JOIN TargetOrders ON Orders.OrderId = TargetOrders.OrderId
+    -> GROUP BY TargetOrders.PostalCode
+    -> ORDER BY TotalQuantity DESC limit 3;
++------------+---------------+
+| PostalCode | TotalQuantity |
++------------+---------------+
+| 02169      |          4688 |
+| 02155      |          4127 |
+| 02446      |          2622 |
++------------+---------------+
+3 rows in set (8.00 sec)
+
+mysql> 

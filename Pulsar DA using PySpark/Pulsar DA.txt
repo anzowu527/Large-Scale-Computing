@@ -1,0 +1,109 @@
+#load data
+rdd1 = sc.textFile("/jet/home/awu3/pulsar.dat")
+rdd2 = rdd1.map(lambda line: [float(x) for x in line.split()])
+
+# I first rounded the coordinates and the frequency to the nearest tenth place to include the errors
+import math
+def round1(value):
+    # Extract the hundredth place
+    hundredth_place = int(value * 100) % 10
+    # Check the value of the hundredth place
+    if hundredth_place == 5:
+        # If the hundredth place is 5, round up to the nearest tenth (avoid the weird rules of the build in rounding method )
+        return math.ceil(value * 10) / 10
+    else:
+        # Otherwise, perform standard rounding to the nearest tenth
+        return round(value, 1)
+    
+def round_data(line):
+    ascension, declination, time, frequency = [float(x) for x in line.split()]
+    return (
+        round1(ascension),
+        round1(declination),
+        round(time, 2),
+        round1(frequency)
+    )
+
+rdd2 = rdd1.map(round_data)
+
+# group together the signals from the same source (same coordinates+frequency)
+rdd3 = rdd2.map(lambda x: ((x[0], x[1], x[3]), x[2]))
+# the key will be the coodiataes and frequency, value is the time
+ 
+rdd4 = rdd3.groupByKey()
+
+print(rdd4.count()) # there are 10218 lines of data left after grouping
+print()
+rdd4list = rdd4.mapValues(list)
+
+sorted_rdd4 = rdd4list.sortBy(lambda x: -len(x[1]))
+sorted_rdd4_20 = sorted_rdd4.take(20)
+for key, values in sorted_rdd4_20:
+    print(f"Key: {key}, Values: {values}, Count: {len(values)}")
+
+print()
+# from the result from sorted_rdd4_100 I found that the source has coordinate at around (104.5, 82.1) and frequency about 2231.5, has the most blips.
+# However, I also observed that there are some other data with the same coordinate but a very similar frequency that has only a 0.1 difference. 
+# and also data with same frequency but the coordinates are off by 0.1
+# So I want to do further investigation to determine whether to take those data in to account.
+
+def check_key(key):
+    return ( key[0]==104.4 or key[0]== 104.5 or key[0]==104.6) and (key[1] == 82.0 or key[1] == 82.1 or key[1] == 82.2) and (key[2] == 2231.4 or key[2] == 2231.5 or key[2] == 2231.6)
+
+filtered_rdd = sorted_rdd4.filter(lambda x: check_key(x[0]))
+filtered_data = filtered_rdd.collect()
+for key, values in filtered_data:
+    print(f"Key: {key}, Values: {values}, Count: {len(values)}")
+
+print()
+# By common sense, as the output filtered data has very similar coordinate and frequency, and the spaced in time are also close to each other in a range
+# I further investigate the data by combining the value from the filtered_data and sort the value (time) in ascending order
+top_data_key, top_data_values = filtered_data[0]
+for key, values in filtered_data[1:]:
+    top_data_values.extend(values)
+    sorted_top_data_values = sorted(top_data_values)
+
+# Count the number of values
+value_count = len(sorted_top_data_values)
+print(f"Key: {top_data_key}, Values: {sorted_top_data_values}, Count: {value_count}")
+print()
+# There are 22 blips, and I observed that there are some relatively big gaps between the bliping time
+# I might have miss some sources in between, 
+# so I decided to wider my filter range a bit by setting a range for the value and also reasonable ascension and declination condition
+
+def filter_conditions(x):
+    key, value = x
+    ascension, declination, _ = key
+    # Check the conditions by widing the range
+    value_condition = 700.0 <= value <= 900
+    ascension_condition = int(ascension) == 104
+    declination_condition = int(declination) == 82
+    # Return True if all conditions are met, False otherwise
+    return value_condition and ascension_condition and declination_condition
+
+# filter rdd3 (the original data) using the filter_conditions defined above
+filtered_rdd3 = rdd3.filter(filter_conditions)
+sorted_rdd3 = filtered_rdd3.sortBy(lambda x: x[1],ascending=True)
+total_lines = sorted_rdd3.count()
+sorted_data3 = sorted_rdd3.collect()
+for key, value in sorted_data3:
+    print(f"Key: {key}, Value: {value}")
+
+print()
+print(f"Total lines of data: {total_lines}") #there are 32 blips now
+print()
+# By common sense, as the coordinate are not off by too much and the spaced time seemed to connect with one another, 
+# I will consider these blips are all come from the same place
+
+first_line = sorted_rdd3.first()
+last_line = sorted_rdd3.top(1, key=lambda x: x[1])[0]
+print(first_line[0])
+print()
+start = first_line[1] 
+end = last_line[1]
+period = round1((end - start)/(total_lines-1))
+x, y, freq = map(round1, first_line[0])
+
+# My Answer
+print()
+print(f"There are {total_lines} blips at location {x},{y} degrees with a frequency of {freq} MHZ and a period of {period} seconds.")

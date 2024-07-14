@@ -1,0 +1,249 @@
+#load data
+rdd1 = sc.textFile("space.dat")
+#rdd1.take(4)
+rdd2 = rdd1.map(lambda x: [float(item.strip()) for item in x.split(',')])
+#rdd2 then have a list of lists, where each of the inner list contains the 6 coordinates
+
+#FINDING NUMBER OF CLUSTERS
+from pyspark.mllib.clustering import KMeans #import kmean
+#finding optimal number of clusters (I set it from 1 to 20)
+for clusters in range(1,5):
+     model = KMeans.train(rdd2, clusters)
+     print (clusters, model.computeCost(rdd2))
+#from the output, the number drop dramatically from 4 to 6, so I assume the cluster that I have is probably 5
+#further check if it is 4,5,or 6
+for trials in range(5):
+    print
+    for clusters in range(3, 10):
+        model = KMeans.train(rdd2,clusters)
+        print (clusters, model.computeCost(rdd2))
+    print('')
+# from the output I think it is reasonable to conclude the data has 5 clusters 
+# as the decrease of the WSSSE from 4 cluster to 5 is greater than 5 clusters to 6 
+
+model = KMeans.train(rdd2, 5,seed=777)
+centers = model.clusterCenters  
+print("Initial center:")
+for i, center in enumerate(centers):
+    print(f"Cluster Center: {center}")
+#the output shows the 5 centers of my cluster
+
+rdd_with_five_zeros = rdd2.filter(lambda row: row.count(0) == 5)
+count_rows_with_five_zeros = rdd_with_five_zeros.count()
+print(f"Number of rows with exactly five zeros: {count_rows_with_five_zeros}")
+
+'''the output stats tells that the data is fairly distributed in the column that has non-zero value.
+I decided to remove these data from rdd2 and evaluate them seperatly.'''
+rdd2_tuples = rdd2.map(tuple)
+rdd_with_five_zeros_tuples = rdd_with_five_zeros.map(tuple)
+new_rdd2 = rdd2_tuples.subtract(rdd_with_five_zeros_tuples)
+# new_rdd2 now contains the rows from rdd2 excluding those in rdd_with_five_zeros
+
+import math
+# Function to calculate Euclidean distance
+def euclidean_distance(point, center):
+    return math.sqrt(sum([(float(a) - float(b)) ** 2 for a, b in zip(point, center)]))
+# Assign each point to a cluster and calculate distance to center
+rdd3 = new_rdd2.map(lambda point: (model.predict(point), (point, euclidean_distance(point, centers[model.predict(point)]))))
+
+#extract the outliers by Euclidean distance
+rdd_outliers = rdd3.filter(lambda x: x[1][1] > 40) #40 comes from previous output observation
+rdd_outlier_points = rdd_outliers.map(lambda outlier: outlier[1][0])
+
+#remove outliers from new_rdd2
+newrdd2_tuples = new_rdd2.map(tuple)
+outlier_tuples = rdd_outlier_points.map(tuple)
+final_rdd2 = newrdd2_tuples.subtract(outlier_tuples)
+
+# Count the number of points in each cluster from the refined rdd
+print("After removing outliers:")
+model = KMeans.train(final_rdd2, 5,seed=777)
+centers = model.clusterCenters 
+# Count the number of points in each cluster
+cluster_counts = final_rdd2.map(lambda point: (model.predict(point), 1)).countByKey()
+# Print the number of points in each cluster
+for cluster, count in cluster_counts.items():
+    print(f"Cluster {cluster} has {count} points")
+
+
+# Dictionary to store centers and max distances of each cluster
+cluster_info = {}
+
+# Finding the furthest distance to the center within each cluster
+for i, center in enumerate(centers):
+    # Filter the points in the cluster
+    cluster_points_rdd = final_rdd2.filter(lambda x: model.predict(x) == i)
+    # Calculate the distance of each point in the cluster to the center
+    distances_rdd = cluster_points_rdd.map(lambda x: euclidean_distance(x, center))
+    # Find the maximum distance in the cluster
+    max_distance = distances_rdd.max()
+    # Storing the center, max distance, and count in the dictionary
+    cluster_info[i] = {
+        'center': center,
+        'max_distance': max_distance,
+        'count': cluster_counts[i]  # Add the count here
+    }
+# Accessing the information for each cluster
+for i in range(5):
+    print(f"Cluster {i} Center: {cluster_info[i]['center']}")
+    print(f"Cluster {i} Max Distance: {cluster_info[i]['max_distance']}")
+    print(f"Cluster {i} Count: {cluster_info[i]['count']}") 
+outlier_count = rdd_outliers.count()
+print(f"Number of outliers: {outlier_count}")
+
+'''
+cluster 0 = Sphere
+cluster 1 = Rectangular prism
+cluster 2 = Rectangular prism
+cluster 3 = Cylinder
+cluster 4 = symmetric object
+'''
+# CALCULATE OBJECT SIZE
+# CYLINDER: Find the cluster with max distance approximately 2.669
+target_cluster_id = None
+for i in range(5):
+    if round(cluster_info[i]['max_distance'], 3) == 2.669:
+        target_cluster_id = i
+        break
+if target_cluster_id is None:
+    print("No cluster found with max distance around 2.669")
+else:
+    #print(f"Cluster found: {target_cluster_id}")
+    # Filter the RDD for the target cluster
+    target_cluster_rdd = final_rdd2.filter(lambda x: model.predict(x) == target_cluster_id)
+
+import itertools
+def calculate_pairwise_distances(cluster_rdd):
+    # Collect data points in the cluster
+    points = cluster_rdd.collect()
+    # Calculate pairwise distances
+    pairwise_distances = []
+    for point_a, point_b in itertools.combinations(points, 2):
+        distance = euclidean_distance(point_a, point_b)
+        pairwise_distances.append(((point_a, point_b), distance))
+    return pairwise_distances
+# Calculate pairwise distances if the cluster is found
+if target_cluster_id is not None:
+    pairwise_distances = calculate_pairwise_distances(target_cluster_rdd)
+    # Sort by distance and take the top 25
+    top_25_pairs = sorted(pairwise_distances, key=lambda x: x[1], reverse=True)[:25]
+    #for pair, distance in top_25_pairs:
+        #print(f"Points: {pair}, Distance: {distance}")
+
+#Cluster all those points in the pairs and they are the points that are on the two side of the circle of the cylinder
+def flatten_and_deduplicate(pairs):
+    flattened = itertools.chain.from_iterable(pairs)
+    return list(set(flattened))
+# Extract the points from the top 25 pairs
+top_25_points = [pair for pair, _ in top_25_pairs]
+unique_points = flatten_and_deduplicate(top_25_points)
+# Create an RDD from these unique points
+unique_points_rdd = sc.parallelize(unique_points)
+# Train the KMeans model with two clusters
+optimal_model = KMeans.train(unique_points_rdd, 2, seed=777)
+# Assign points to clusters
+cluster_assignments = unique_points_rdd.map(lambda point: (optimal_model.predict(point), point))
+# Separate the points into two RDDs for each cluster
+circle1 = cluster_assignments.filter(lambda x: x[0] == 0).map(lambda x: x[1])
+circle2 = cluster_assignments.filter(lambda x: x[0] == 1).map(lambda x: x[1])
+# Calculate pairwise distances for each cluster and get the top 20
+for cluster_id, cluster_rdd in enumerate([circle1, circle2]):
+    pairwise_distances = calculate_pairwise_distances(cluster_rdd)
+    top_20_pairs = sorted(pairwise_distances, key=lambda x: x[1], reverse=True)[:20]
+    #print(f"Top 20 pairs in Cluster {cluster_id + 1}:")
+    #for pair, distance in top_20_pairs:
+        #print(f"Points: {pair}, Distance: {distance}")
+
+max_distance_circle1 = sorted(calculate_pairwise_distances(circle1), key=lambda x: x[1], reverse=True)[0][1]
+max_distance_circle2 = sorted(calculate_pairwise_distances(circle2), key=lambda x: x[1], reverse=True)[0][1]
+# Calculate the average of the maximum distances
+average_max_distance = (max_distance_circle1 + max_distance_circle2) / 2
+print(f"Cylinder Diameter: {average_max_distance}")
+
+# Rectangular prism
+# Step 1: Identify the Cluster with Max Distance ≈ 6.000
+target_cluster_id = None
+for i in range(5):
+    if round(cluster_info[i]['max_distance'], 3) == 6.000:
+        target_cluster_id = i
+        break
+if target_cluster_id is None:
+    print("No cluster found with max distance around 6.000")
+else:
+    #print(f"Cluster found: {target_cluster_id}")
+    # Filter the RDD for the target cluster
+    target_cluster_rdd = final_rdd2.filter(lambda x: model.predict(x) == target_cluster_id)
+# Step 2:find the top 4 pairs with largest distance
+if target_cluster_id is not None:
+    pairwise_distances = calculate_pairwise_distances(target_cluster_rdd)
+    # Sort by distance and take the top 50
+    top_50_pairs = sorted(pairwise_distances, key=lambda x: x[1], reverse=True)[:50]
+    #for pair, distance in top_100_pairs:
+        #print(f"Points: {pair}, Distance: {distance}")
+# Extract the points from the top 25 pairs
+top_50_points = [pair for pair, _ in top_50_pairs]
+unique_points = flatten_and_deduplicate(top_50_points)
+# Create an RDD from these unique points
+unique_points_rdd = sc.parallelize(unique_points)
+# Train the KMeans model with two clusters
+optimal_model = KMeans.train(unique_points_rdd, 2, seed=777)
+# Assign points to clusters
+cluster_assignments = unique_points_rdd.map(lambda point: (optimal_model.predict(point), point))
+# Separate the points into two RDDs for each cluster
+square1 = cluster_assignments.filter(lambda x: x[0] == 0).map(lambda x: x[1])
+square2 = cluster_assignments.filter(lambda x: x[0] == 1).map(lambda x: x[1])
+# Calculate pairwise distances for each cluster and get the top 20
+for cluster_id, cluster_rdd in enumerate([square1, square2]):
+    pairwise_distances = calculate_pairwise_distances(cluster_rdd)
+    top_100_pairs = sorted(pairwise_distances, key=lambda x: x[1], reverse=True)
+    #print(f"Top 20 pairs in Cluster {cluster_id + 1}:")
+    #for pair, distance in top_100_pairs:
+        #print(f"Points: {pair}, Distance: {distance}")
+
+max_distance_square1 = sorted(calculate_pairwise_distances(square1), key=lambda x: x[1], reverse=True)[0][1]
+max_distance_square2 = sorted(calculate_pairwise_distances(square2), key=lambda x: x[1], reverse=True)[0][1]
+# Calculate the average of the maximum distances
+average_max_distance = (max_distance_square1 + max_distance_square2) / 2
+print(f"Square diagonal: {average_max_distance}")
+
+#Square(outliers)
+outlier_points = rdd_outlier_points.collect()
+# Calculate pairwise distances using a list comprehension and itertools.combinations
+pairwise_distances = [((point_a, point_b), euclidean_distance(point_a, point_b))
+                      for point_a, point_b in itertools.combinations(outlier_points, 2)]
+'''
+output:
+[(((91.0, 92.0, 93.0, 14.0, 15.0, 16.0), (91.0, 92.0, 93.0, 94.0, 95.0, 96.0)),
+  138.5640646055102),
+ (((91.0, 92.0, 93.0, 14.0, 15.0, 16.0), (11.0, 12.0, 13.0, 94.0, 95.0, 96.0)),
+  195.95917942265424),
+ (((91.0, 92.0, 93.0, 14.0, 15.0, 16.0), (11.0, 12.0, 13.0, 14.0, 15.0, 16.0)),
+  138.5640646055102),
+ (((91.0, 92.0, 93.0, 94.0, 95.0, 96.0), (11.0, 12.0, 13.0, 94.0, 95.0, 96.0)),
+  138.5640646055102),
+ (((91.0, 92.0, 93.0, 94.0, 95.0, 96.0), (11.0, 12.0, 13.0, 14.0, 15.0, 16.0)),
+  195.95917942265424),
+ (((11.0, 12.0, 13.0, 94.0, 95.0, 96.0), (11.0, 12.0, 13.0, 14.0, 15.0, 16.0)),
+  138.5640646055102)]
+  it is obvious that there are four sides of 138.564
+'''
+# Recalculate model on the final RDD
+model = KMeans.train(final_rdd2, 5, seed=777)
+centers = model.clusterCenters  
+
+# Create RDDs for each cluster
+cluster0_rdd = final_rdd2.filter(lambda x: model.predict(x) == 0)
+cluster1_rdd = final_rdd2.filter(lambda x: model.predict(x) == 1)
+cluster2_rdd = final_rdd2.filter(lambda x: model.predict(x) == 2)
+cluster3_rdd = final_rdd2.filter(lambda x: model.predict(x) == 3)
+cluster4_rdd = final_rdd2.filter(lambda x: model.predict(x) == 4)
+
+#export the rdd so I can examine the shapes using other tools
+cluster0_rdd.repartition(1).saveAsTextFile("./newcluster0")
+cluster1_rdd.repartition(1).saveAsTextFile("./newcluster1")
+cluster2_rdd.repartition(1).saveAsTextFile("./newcluster2")
+cluster3_rdd.repartition(1).saveAsTextFile("./newcluster3")
+cluster4_rdd.repartition(1).saveAsTextFile("./newcluster4")
+rdd_outliers.repartition(1).saveAsTextFile("./newrdd_outliers")
+rdd_with_five_zeros.repartition(1).saveAsTextFile("./rdd_with_five_zeros")
+
