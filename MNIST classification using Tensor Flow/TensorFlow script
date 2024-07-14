@@ -1,0 +1,154 @@
+import tensorflow as tf
+mnist = tf.keras.datasets.fashion_mnist
+(train_images, train_labels), (test_images, test_labels) = mnist.load_data()
+
+train_images = train_images.reshape(60000, 28, 28, 1).astype('float32')
+test_images = test_images.reshape(10000, 28, 28, 1).astype('float32')
+test_images /= 255 
+train_images /= 255
+
+model = tf.keras.Sequential([#Added Dropout => 0.9178
+tf.keras.layers.Conv2D(32, (3,3), activation='relu', input_shape=(28,28,1)), 
+tf.keras.layers.Conv2D(64, (3,3), activation='relu'),
+tf.keras.layers.MaxPooling2D(2,2),
+tf.keras.layers.Dropout(0.25),
+tf.keras.layers.Flatten(),
+tf.keras.layers.Dense(128, activation='relu'),
+tf.keras.layers.Dropout(0.5),
+tf.keras.layers.Dense(10, activation='softmax')
+])
+
+model = tf.keras.Sequential([ # Added BatchNormalization =>0.9995/ 0.9211
+tf.keras.layers.Conv2D(32, (3,3), activation='relu', input_shape=(28,28,1)), 
+tf.keras.layers.BatchNormalization(),
+tf.keras.layers.Conv2D(64, (3,3), activation='relu'),
+tf.keras.layers.MaxPooling2D(2,2),
+tf.keras.layers.BatchNormalization(),
+tf.keras.layers.Flatten(),
+tf.keras.layers.Dense(128, activation='relu'),
+tf.keras.layers.BatchNormalization(),
+tf.keras.layers.Dense(10, activation='softmax')
+])
+
+# The previous model is overfitted as the training accuracy is 0.9995
+# Adding different layers to improve accuracy:
+
+model = tf.keras.Sequential([ # Additional Conv Layer and Increased number of neurons => 0.9669/ 0.9065
+    tf.keras.layers.Conv2D(32, (3,3), activation='relu', input_shape=(28,28,1)),
+    tf.keras.layers.MaxPooling2D(2,2),
+    tf.keras.layers.Conv2D(64, (3,3), activation='relu'),
+    tf.keras.layers.MaxPooling2D(2,2),
+    tf.keras.layers.Conv2D(128, (3,3), activation='relu'), 
+    tf.keras.layers.Flatten(),
+    tf.keras.layers.Dense(256, activation='relu'),  
+    tf.keras.layers.Dropout(0.5),
+    tf.keras.layers.Dense(10, activation='softmax')
+])
+
+model = tf.keras.Sequential([#0.9937/0.9278 
+    # Added Conv Layer with increased filters
+    # Added Maxpooling layer
+    # Increased neurons in Dense layer
+    tf.keras.layers.Conv2D(32, (3,3), activation='relu', input_shape=(28,28,1)),
+    tf.keras.layers.BatchNormalization(),
+    tf.keras.layers.Conv2D(64, (3,3), activation='relu'),
+    tf.keras.layers.MaxPooling2D(2,2),
+    tf.keras.layers.BatchNormalization(),
+    tf.keras.layers.Conv2D(128, (3,3), activation='relu'),  
+    tf.keras.layers.MaxPooling2D(2,2),  
+    tf.keras.layers.BatchNormalization(),
+    tf.keras.layers.Flatten(),
+    tf.keras.layers.Dense(256, activation='relu'),  
+    tf.keras.layers.Dropout(0.5), 
+    tf.keras.layers.BatchNormalization(),
+    tf.keras.layers.Dense(10, activation='softmax')
+])
+
+model = tf.keras.Sequential([#0.9987/0.9285 
+    # Added Conv Layer with increased filters
+    # Added Maxpooling layer
+    # Increased neurons in Dense layer
+    # change the optimzer to sgd from Adam and improved accuracy!
+    tf.keras.layers.Conv2D(32, (3,3), activation='relu', input_shape=(28,28,1)),
+    tf.keras.layers.BatchNormalization(),
+    tf.keras.layers.Conv2D(64, (3,3), activation='relu'),
+    tf.keras.layers.MaxPooling2D(2,2),
+    tf.keras.layers.BatchNormalization(),
+    tf.keras.layers.Conv2D(128, (3,3), activation='relu'),  
+    tf.keras.layers.MaxPooling2D(2,2),  
+    tf.keras.layers.BatchNormalization(),
+    tf.keras.layers.Flatten(),
+    tf.keras.layers.Dense(256, activation='relu'),  
+    tf.keras.layers.Dropout(0.5), 
+    tf.keras.layers.BatchNormalization(),
+    tf.keras.layers.Dense(10, activation='softmax')
+])
+
+model = tf.keras.Sequential([#0.9956/0.9316  => Best so far!
+    # Added Conv Layer with increased filters
+    # Added Maxpooling layer
+    # Increased neurons in Dense layer
+    # Added parameter for the optimizer sgd
+    tf.keras.layers.Conv2D(32, (3,3), activation='relu', input_shape=(28,28,1)),
+    tf.keras.layers.BatchNormalization(),
+    tf.keras.layers.Conv2D(64, (3,3), activation='relu'),
+    tf.keras.layers.MaxPooling2D(2,2),
+    tf.keras.layers.BatchNormalization(),
+    tf.keras.layers.Conv2D(128, (3,3), activation='relu'),  
+    tf.keras.layers.MaxPooling2D(2,2),  
+    tf.keras.layers.BatchNormalization(),
+    tf.keras.layers.Flatten(),
+    tf.keras.layers.Dense(256, activation='relu'),  
+    tf.keras.layers.Dropout(0.5), 
+    tf.keras.layers.BatchNormalization(),
+    tf.keras.layers.Dense(10, activation='softmax')
+])
+# Tuning model compile parameter to improve accuracy:
+# Using the last best model:
+
+# Trying RMSprop: => 0.9984/0.9276 => not improving
+model.compile(optimizer=tf.keras.optimizers.legacy.RMSprop(learning_rate=0.001, decay=1e-6), 
+              loss='sparse_categorical_crossentropy', 
+              metrics=['accuracy'])
+
+# Trying Adam with parameter: => 0.9981/0.9285 => not improving
+model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.001), 
+              loss='sparse_categorical_crossentropy', 
+              metrics=['accuracy']) #accuracy become lower
+
+# Trying SGD: => 0.9992/0.9308 => better 
+model.compile(optimizer= tf.keras.optimizers.SGD(learning_rate=0.01, momentum=0.9), 
+              loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+
+#tuning the MRSprop parameter: => 0.9991/0.9298 => not improving
+initial_learning_rate = 0.001
+lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
+    initial_learning_rate,
+    decay_steps=100000,
+    decay_rate=0.96,
+    staircase=True)
+
+
+#tuning the MRSprop parameter again:  => 0.9999/0.9305 => not bad
+initial_learning_rate = 0.0005
+lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
+    initial_learning_rate,
+    decay_steps=50000,  # Adjusted based on your dataset size and batch size
+    decay_rate=0.9,     # More aggressive decay
+    staircase=True)
+model.compile(optimizer=tf.keras.optimizers.RMSprop(learning_rate=lr_schedule),
+              loss='sparse_categorical_crossentropy', 
+              metrics=['accuracy'])
+
+history = model.fit(train_images, train_labels, batch_size=128, epochs=40, verbose=1, 
+                    validation_data=(test_images, test_labels))
+
+#Trying SGD: => 0.9999/0.9314 => best model!
+model.compile(
+    optimizer=tf.keras.optimizers.SGD(lr=0.01, momentum=0.9),
+    loss='sparse_categorical_crossentropy',
+    metrics=['accuracy']
+)
+
+history = model.fit(train_images, train_labels, batch_size=250, epochs=40, verbose=1, 
+                    validation_data=(test_images, test_labels))
